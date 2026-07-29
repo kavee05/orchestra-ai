@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Early Warning System</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">⚠︎</span>
+      <div>
+        <div class="brand-title">KPI Early Warning System</div>
+        <div class="brand-subtitle">Proactive organizational intelligence</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div id="model-badge" class="model-badge">…</div>
+      <button id="refresh-btn" class="ghost-btn" title="Re-run all agents">
+        ⟳ Refresh analysis
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ============= Organizational Health Synthesis ============= -->
+    <section class="card synthesis-card" id="synthesis-section">
+      <div class="card-header">
+        <h2>Organizational Health Synthesis</h2>
+        <span class="badge badge-neutral" id="alert-count-badge">0 alerts</span>
+      </div>
+      <div id="synthesis-body" class="synthesis-body">
+        <div class="placeholder">Running domain agents…</div>
+      </div>
+    </section>
+
+    <!-- ============= KPI Trend Charts (per domain) ============= -->
+    <section class="charts-grid">
+      <div class="card chart-card chart-card-clickable" data-domain="Finance" data-chart-id="chart-finance" role="button" tabindex="0" aria-label="Expand Finance chart">
+        <div class="card-header">
+          <h2>Finance</h2>
+          <div class="chart-controls">
+            <span class="domain-meta" id="finance-meta"></span>
+            <button class="ghost-btn small reset-zoom-btn" data-zoom-target="chart-finance" title="Reset zoom">⟲ Reset zoom</button>
+          </div>
+        </div>
+        <div class="chart-host">
+          <canvas id="chart-finance"></canvas>
+        </div>
+        <div class="zoom-hint">Tip: scroll to zoom, shift-drag to pan, double-click to reset. Click anywhere on the chart to expand.</div>
+      </div>
+      <div class="card chart-card chart-card-clickable" data-domain="Sales" data-chart-id="chart-sales" role="button" tabindex="0" aria-label="Expand Sales chart">
+        <div class="card-header">
+          <h2>Sales</h2>
+          <div class="chart-controls">
+            <span class="domain-meta" id="sales-meta"></span>
+            <button class="ghost-btn small reset-zoom-btn" data-zoom-target="chart-sales" title="Reset zoom">⟲ Reset zoom</button>
+          </div>
+        </div>
+        <div class="chart-host">
+          <canvas id="chart-sales"></canvas>
+        </div>
+        <div class="zoom-hint">Tip: scroll to zoom, shift-drag to pan, double-click to reset. Click anywhere on the chart to expand.</div>
+      </div>
+      <div class="card chart-card chart-card-clickable" data-domain="Operations" data-chart-id="chart-operations" role="button" tabindex="0" aria-label="Expand Operations chart">
+        <div class="card-header">
+          <h2>Operations</h2>
+          <div class="chart-controls">
+            <span class="domain-meta" id="ops-meta"></span>
+            <button class="ghost-btn small reset-zoom-btn" data-zoom-target="chart-operations" title="Reset zoom">⟲ Reset zoom</button>
+          </div>
+        </div>
+        <div class="chart-host">
+          <canvas id="chart-operations"></canvas>
+        </div>
+        <div class="zoom-hint">Tip: scroll to zoom, shift-drag to pan, double-click to reset. Click anywhere on the chart to expand.</div>
+      </div>
+    </section>
+
+    <!-- ============= Anomalies & Alerts ============= -->
+    <section class="card alerts-card">
+      <div class="card-header">
+        <h2>Anomalies &amp; Alerts</h2>
+        <div class="legend">
+          <span class="severity-dot severity-high"></span> High
+          <span class="severity-dot severity-medium"></span> Medium
+          <span class="severity-dot severity-low"></span> Low
+        </div>
+      </div>
+      <div id="alerts-list" class="alerts-list">
+        <div class="placeholder">Loading…</div>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <span id="footer-info">Anomaly thresholds: |z| ≥ 1.6 vs 3-month rolling baseline, or |Δtarget| ≥ 8%.</span>
+    </footer>
+  </main>
+
+  <!-- ============= Chart expand modal (Part 2) ============= -->
+  <!-- Hidden by default; opened by dashboard.js when the user clicks a
+       chart card. Shows one chart at full size with zoom/pan/reset. -->
+  <div id="chart-modal" class="chart-modal" hidden aria-hidden="true"
+       role="dialog" aria-modal="true" aria-labelledby="chart-modal-title">
+    <div class="chart-modal-backdrop" data-modal-close></div>
+    <div class="chart-modal-panel">
+      <div class="chart-modal-header">
+        <h3 id="chart-modal-title">Chart</h3>
+        <div class="chart-modal-controls">
+          <button id="chart-modal-reset" class="ghost-btn small"
+                  title="Reset zoom">⟲ Reset zoom</button>
+          <button id="chart-modal-close" class="ghost-btn small chart-modal-x"
+                  aria-label="Close" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="chart-modal-host">
+        <canvas id="chart-modal-canvas"></canvas>
+      </div>
+      <div class="zoom-hint">Pinch or scroll to zoom · click-and-drag to pan · double-click or ⟲ to reset.</div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

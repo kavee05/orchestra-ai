@@ -1,0 +1,29 @@
+# Render Blueprint - one-click deploy.
+# In Render dashboard: New + -> Blueprint -> point at your repo -> it
+# auto-detects this file and provisions the service with the env vars
+# listed below. Edit OPENAI_API_KEY value in the Render dashboard after
+# first deploy - it's intentionally empty here.
+#
+# You can also ignore this file and create the Web Service manually from
+# the Render dashboard (the README walkthrough covers both paths).
+
+services:
+  - type: web
+    name: kpi-ews
+    runtime: python
+    plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 app:app"
+    envVars:
+      - key: OPENAI_API_KEY
+        # ENTER YOUR REAL KEY in Render's dashboard after first deploy.
+        # Do NOT put it here - render.yaml is committed to git.
+        value: ""
+      - key: OPENAI_BASE_URL
+        value: "https://api.groq.com/openai/v1"
+      - key: OPENAI_MODEL
+        value: "openai/gpt-oss-20b"
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: LLM_MIN_INTERVAL
+        value: "2.5"

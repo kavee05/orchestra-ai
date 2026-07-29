@@ -1,0 +1,46 @@
+# =====================================================================
+# .gitignore for KPI Early Warning System
+# Protect secrets + exclude local build artefacts so we never accidentally
+# push them to GitHub / Render.
+# =====================================================================
+
+# --- Secrets: NEVER commit these. The Groq key is set in Render's env
+# vars dashboard, not in the repo.
+.env
+.env.*
+!.env.example
+
+# --- Local Python venv (created locally with `python -m venv .venv`)
+.venv/
+venv/
+env/
+
+# --- Python bytecode + cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Test / scratch
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Logs
+*.log
+logs/

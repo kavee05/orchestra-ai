@@ -164,13 +164,39 @@ class DomainAgent:
         })
         if parsed.get("raw") is not None:
             # _parse_json_response only adds "raw" when it gave up on the
-            # response (all parse paths failed). Surface it loudly.
-            logger.warning(
-                "LLM FALLBACK (alert %s — %s/%s/%s): JSON parse failed, "
-                "using placeholder. raw=%s",
-                anomaly.alert_id, anomaly.domain, anomaly.kpi_name,
-                anomaly.month, (parsed["raw"] or "")[:400],
-            )
+            # response (all parse paths failed). With openai/gpt-oss-20b
+            # this happens whenever the model emits prose instead of strict
+            # JSON. Instead of discarding the perfectly good analysis,
+            # surface the raw text as the root_cause and trim if huge so
+            # the alert card stays readable. The action line stays generic
+            # because we can't reliably extract it from prose.
+            raw_text = (parsed.get("raw") or "").strip()
+            if raw_text:
+                # Strip a leading "Root cause:" or similar label the model
+                # sometimes prepends; the alert card already has its own
+                # label.
+                cleaned = re.sub(
+                    r"^\s*(root\s*cause|analysis|answer|response)\s*[:\-]\s*",
+                    "", raw_text, flags=re.I,
+                ).strip()
+                max_len = 800
+                parsed["root_cause"] = (
+                    cleaned[:max_len] + ("…" if len(cleaned) > max_len else "")
+                )
+                parsed["recommended_action"] = "See analysis above for details."
+                logger.warning(
+                    "LLM FALLBACK (alert %s — %s/%s/%s): JSON parse failed; "
+                    "showing raw prose as root_cause (%d chars).",
+                    anomaly.alert_id, anomaly.domain, anomaly.kpi_name,
+                    anomaly.month, len(cleaned),
+                )
+            else:
+                logger.warning(
+                    "LLM FALLBACK (alert %s — %s/%s/%s): JSON parse failed "
+                    "and raw response was empty; using placeholder.",
+                    anomaly.alert_id, anomaly.domain, anomaly.kpi_name,
+                    anomaly.month,
+                )
         return parsed
 
 
@@ -256,11 +282,37 @@ class SynthesisAgent:
             ],
         })
         if parsed.get("raw") is not None:
-            logger.warning(
-                "LLM FALLBACK (synthesis — %d anomalies): JSON parse failed, "
-                "using placeholder. raw=%s",
-                len(anomalies), (parsed["raw"] or "")[:400],
-            )
+            # Same reasoning as DomainAgent: when the model returns prose
+            # instead of JSON, surface the raw text as the executive
+            # summary rather than discarding the real synthesis.
+            raw_text = (parsed.get("raw") or "").strip()
+            if raw_text:
+                cleaned = re.sub(
+                    r"^\s*(executive\s*summary|summary|answer|response)\s*[:\-]\s*",
+                    "", raw_text, flags=re.I,
+                ).strip()
+                max_len = 1200  # synthesis is the cross-domain narrative,
+                                # can run longer than per-alert prose
+                parsed["executive_summary"] = (
+                    cleaned[:max_len] + ("…" if len(cleaned) > max_len else "")
+                )
+                parsed["prioritized_actions"] = [
+                    "Review the synthesis prose above for cross-domain actions.",
+                    "Open individual alerts below for domain-specific actions.",
+                    "Re-run analysis if a structured synthesis is needed.",
+                ]
+                logger.warning(
+                    "LLM FALLBACK (synthesis — %d anomalies): JSON parse "
+                    "failed; showing raw prose as executive_summary "
+                    "(%d chars).",
+                    len(anomalies), len(cleaned),
+                )
+            else:
+                logger.warning(
+                    "LLM FALLBACK (synthesis — %d anomalies): JSON parse "
+                    "failed and raw response was empty; using placeholder.",
+                    len(anomalies),
+                )
         return parsed
 
 

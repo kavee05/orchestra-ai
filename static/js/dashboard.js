@@ -1,5 +1,5 @@
 /* =====================================================================
-   KPI Early Warning System - frontend logic
+   Argus - frontend logic
    Loads /api/bootstrap on startup, renders 3 charts + alert list,
    lazily renders per-alert agent analysis on click.
    ===================================================================== */

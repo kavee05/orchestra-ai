@@ -1,4 +1,4 @@
-# KPI Early Warning System
+# Argus
 
 > Hackathon prototype - **AI CAN DO IT** Tencent Cloud x UTM Hackathon  
 > AI Agent Track - Case Study 2: *Intelligent Early Warning System for Organisational Performance*

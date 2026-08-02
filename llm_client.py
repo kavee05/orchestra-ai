@@ -121,7 +121,18 @@ class LLMClient:
         """Send a chat completion. Returns the assistant text on success.
 
         On persistent failure (after retries) returns a dict:
-            {"_error": True, "reason": str, "stage": str, "raw": str}
+            {
+                "_error":    True,
+                "stage":     "real_api",
+                "reason":    str,   # human-readable summary (type + status
+                                    # + first 160 chars of exc + body preview)
+                "raw":       str,   # up to 600 chars of the actual response
+                                    # body from the server (so the user can
+                                    # see the real API error text in logs)
+                "status":    int|None,  # HTTP status code, if available
+                "exception": str|None, # "<ClassName>: <message>" or None
+                "model":     str,
+            }
         The agents check `isinstance(result, dict) and result.get("_error")`
         to decide whether to use a fallback message instead of parsing
         the response as JSON.
@@ -136,6 +147,12 @@ class LLMClient:
 
         last_exc: Optional[Exception] = None
         last_status: Optional[int] = None
+        # Hoist the response body out of the per-attempt block so the
+        # final error dict can surface it. The user's debug log will
+        # then show the REAL API error text (e.g. Groq's "tool_use
+        # not supported" or "context_length_exceeded" or whatever the
+        # model actually returned), not just a generic exception name.
+        last_body: str = ""
         # Exponential backoff schedule: 1s, 2s, 4s.
         backoffs = [1.0, 2.0, 4.0]
         max_attempts = 1 + len(backoffs)  # initial + 3 retries
@@ -156,19 +173,19 @@ class LLMClient:
                 last_exc = exc
                 # Read the response body + status if the failure was an HTTPError.
                 last_status = None
-                body = ""
+                last_body = ""
                 if HTTPError_cls and isinstance(exc, HTTPError_cls):
                     resp = getattr(exc, "response", None)
                     if resp is not None:
                         last_status = getattr(resp, "status_code", None)
                         try:
-                            body = (resp.text or "")[:300]
+                            last_body = (resp.text or "")[:600]
                         except Exception:
                             pass
                 is_rate_limit = (
                     last_status == 429
-                    or "rate_limit" in body.lower()
-                    or "tpm" in body.lower()
+                    or "rate_limit" in last_body.lower()
+                    or "tpm" in last_body.lower()
                 )
                 if is_rate_limit:
                     self.session_stats["calls_rate_limited"] += 1
@@ -184,12 +201,27 @@ class LLMClient:
                 self._throttle()
 
         self.session_stats["calls_failed"] += 1
+        # Build a rich error dict. The `reason` is the human-readable
+        # exception summary (type + HTTP status + first 160 chars of
+        # the exception message). The `raw` field carries up to 600
+        # chars of the actual API response body so the user's logs
+        # always include the real server-side error text — never just
+        # a generic "ConnectionError" or "Timeout".
+        reason = (f"{last_exc.__class__.__name__}"
+                  + (f" (HTTP {last_status})" if last_status else "")
+                  + (f": {str(last_exc)[:160]}" if last_exc else ""))
+        if last_body and last_body not in reason:
+            reason = f"{reason} | body={last_body[:200]}"
         return {
             "_error": True,
             "stage": "real_api",
-            "reason": (f"{last_exc.__class__.__name__}"
-                       + (f" (HTTP {last_status})" if last_status else "")
-                       + (f": {str(last_exc)[:160]}" if last_exc else "")),
+            "reason": reason,
+            "raw": last_body,           # full body (up to 600 chars)
+            "status": last_status,      # HTTP status code, if any
+            "exception": (
+                f"{last_exc.__class__.__name__}: {str(last_exc)[:200]}"
+                if last_exc else None
+            ),
             "model": self.model,
         }
 

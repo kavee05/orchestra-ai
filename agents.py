@@ -138,16 +138,30 @@ class DomainAgent:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=250,   # ~80 words root_cause + 1 action fits easily
+            # 900 tokens gives openai/gpt-oss-20b (which often reasons out
+            # loud before emitting JSON) enough headroom to finish a full
+            # root_cause + recommended_action response AND close the JSON
+            # braces/quote. 250 was causing the response to be truncated
+            # mid-sentence, leaving us with un-parseable JSON.
+            max_tokens=900,
             label=label,
         )
         # Surface error dicts from LLMClient.chat() unchanged.
         if isinstance(raw, dict) and raw.get("_error"):
-            logger.warning(
-                "LLM FALLBACK (alert %s — %s/%s/%s): using placeholder. "
-                "reason=%s",
+            # Complete API failure (not a parse issue) — log at ERROR so
+            # the actual exception type, HTTP status, and response body
+            # show up clearly in Render logs. The user explicitly asked
+            # to see the real error text, not just a generic placeholder,
+            # so we can tell at a glance whether it was a timeout, a
+            # 429, a 5xx, or an actual API error response. The `reason`
+            # field already includes a 200-char body preview; we log it
+            # as a single field to avoid duplication in the log line.
+            logger.error(
+                "LLM CALL FAILED (alert %s — %s/%s/%s): %s | model=%s",
                 anomaly.alert_id, anomaly.domain, anomaly.kpi_name,
-                anomaly.month, raw.get("reason", "error"),
+                anomaly.month,
+                raw.get("reason", "unknown error"),
+                raw.get("model", "?"),
             )
             return {
                 "root_cause": (
@@ -254,10 +268,13 @@ class SynthesisAgent:
             label=label,
         )
         if isinstance(raw, dict) and raw.get("_error"):
-            logger.warning(
-                "LLM FALLBACK (synthesis — %d anomalies): using placeholder. "
-                "reason=%s",
-                len(anomalies), raw.get("reason", "error"),
+            # Complete API failure (not a parse issue) — log at ERROR so
+            # the actual exception type, HTTP status, and response body
+            # show up clearly in Render logs (see DomainAgent.analyze).
+            logger.error(
+                "LLM CALL FAILED (synthesis — %d anomalies): %s | model=%s",
+                len(anomalies), raw.get("reason", "unknown error"),
+                raw.get("model", "?"),
             )
             return {
                 "executive_summary": (
@@ -367,9 +384,9 @@ def _chat_with_soft_retry(client: LLMClient, *,
             raw = client.chat(messages=messages, temperature=temperature,
                               max_tokens=max_tokens)
             if isinstance(raw, dict) and raw.get("_error"):
-                logger.warning(
-                    "LLM TRANSIENT FAIL (%s): soft-retry also failed: %s",
-                    label, raw.get("reason", ""),
+                logger.error(
+                    "LLM CALL FAILED (soft-retry, %s): %s | model=%s",
+                    label, raw.get("reason", ""), raw.get("model", "?"),
                 )
             else:
                 logger.info("LLM SOFT-RETRY OK (%s)", label)
@@ -448,27 +465,43 @@ def _regex_extract_synthesis(text: str) -> Optional[Dict[str, Any]]:
     a 'prioritized_actions' list in the prose, return them. Falls back to
     returning just the executive_summary if actions can't be located.
     Accepts both quoted ("key":) and unquoted (key:) keys since reasoning
-    models often drop the quotes when they emit prose-form JSON."""
+    models often drop the quotes when they emit prose-form JSON.
+
+    Like the per-alert regex path, the closing `"` is OPTIONAL — a response
+    that was cut off mid-quote is still useful enough to surface with a
+    trailing "…" so the user sees clean text instead of raw braces.
+    """
     out: Dict[str, Any] = {}
-    # Match either "executive_summary" or bare executive_summary, then capture
-    # the first quoted value (with escape handling). 80 char min keeps us
-    # from grabbing tiny fragments.
+    # Match either "executive_summary" or bare executive_summary, then
+    # capture the first quoted value (with escape handling). 20 char min
+    # keeps us from grabbing tiny fragments. The trailing `"?` lets us
+    # match truncated responses that never closed the string.
     m = re.search(
-        r'(?:"executive_summary"|executive_summary)\s*:\s*"((?:\\.|[^"\\])*)"',
+        r'(?:"executive_summary"|executive_summary)\s*:\s*"((?:\\.|[^"\\])*)"?',
         text, re.DOTALL,
     )
     if m:
         val = m.group(1)
+        truncated = (m.end() >= len(text.rstrip()))
         try:
             val = json.loads(f'"{val}"')
         except Exception:
-            pass
-        if len(val.strip()) >= 20:
-            out["executive_summary"] = val.strip()
+            val = (val
+                   .replace("\\n", " ")
+                   .replace("\\\"", '"')
+                   .replace("\\\\", "\\"))
+        val = val.strip()
+        if len(val) >= 20:
+            if truncated:
+                val = val.rstrip().rstrip(",").rstrip()
+                if not val.endswith((".", "!", "?", "…")):
+                    val += "…"
+            out["executive_summary"] = val
 
     # Look for an array literal under prioritized_actions (quoted or not).
+    # Same optional-closing treatment as above.
     m = re.search(
-        r'(?:"prioritized_actions"|prioritized_actions)\s*:\s*\[((?:\\.|[^\[\]\\])*)\]',
+        r'(?:"prioritized_actions"|prioritized_actions)\s*:\s*\[((?:\\.|[^\[\]\\])*)\]?',
         text, re.DOTALL,
     )
     if m:
@@ -522,23 +555,67 @@ def _parse_json_response(raw: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # Per-alert: try to fish out a root_cause / recommended_action
         # from the prose so the user still gets something useful.
-        rc = re.search(r'"root_cause"\s*:\s*"((?:\\.|[^"\\])*)"', text, re.DOTALL)
-        ra = re.search(r'"recommended_action"\s*:\s*"((?:\\.|[^"\\])*)"',
-                       text, re.DOTALL)
+        # The closing `"` is OPTIONAL because with openai/gpt-oss-20b we
+        # sometimes see responses that get cut off mid-sentence (or
+        # mid-quote) due to max_tokens. We detect truncation by checking
+        # whether the text "looks like JSON" but the candidate value
+        # extends to the end of the string — in that case we append "…"
+        # to signal the cut-off to the reader.
+        def _extract_quoted_field(pattern: str, src: str) -> Optional[tuple]:
+            """Return (value, truncated_bool) or None if no match.
+            truncated_bool=True means the field was found but never
+            closed with a `"`, which usually means the model response
+            was cut off mid-sentence."""
+            m = re.search(pattern, src, re.DOTALL)
+            if not m:
+                return None
+            raw_val = m.group(1)
+            truncated = (m.end() >= len(src.rstrip()))
+            try:
+                val = json.loads(f'"{raw_val}"').strip()
+            except Exception:
+                # Unbalanced escapes etc. — best-effort: unescape common
+                # sequences by hand so the user still sees clean text.
+                val = (raw_val
+                       .replace("\\n", " ")
+                       .replace("\\\"", '"')
+                       .replace("\\\\", "\\")
+                       .strip())
+            return val, truncated
+
+        rc = _extract_quoted_field(
+            r'"root_cause"\s*:\s*"((?:\\.|[^"\\])*)"?', text)
+        ra = _extract_quoted_field(
+            r'"recommended_action"\s*:\s*"((?:\\.|[^"\\])*)"?', text)
+        # Check whether the whole text "looks like JSON that got cut off":
+        # starts with '{' but never closes with a matching '}'.
+        looks_truncated = (
+            text.lstrip().startswith("{")
+            and not _find_balanced_json_objects(text)
+        )
         if rc or ra:
             out: Dict[str, Any] = {}
             if rc:
-                try:
-                    out["root_cause"] = json.loads(f'"{rc.group(1)}"').strip()
-                except Exception:
-                    out["root_cause"] = rc.group(1).strip()
+                val, tr = rc
+                if tr or looks_truncated:
+                    val = val.rstrip().rstrip(",").rstrip()
+                    if not val.endswith((".", "!", "?", "…")):
+                        val += "…"
+                out["root_cause"] = val
             if ra:
-                try:
-                    out["recommended_action"] = json.loads(f'"{ra.group(1)}"').strip()
-                except Exception:
-                    out["recommended_action"] = ra.group(1).strip()
+                val, tr = ra
+                if tr or looks_truncated:
+                    val = val.rstrip().rstrip(",").rstrip()
+                    if not val.endswith((".", "!", "?", "…")):
+                        val += "…"
+                out["recommended_action"] = val
             for k, v in fallback.items():
                 out.setdefault(k, v)
+            if looks_truncated:
+                # Add a debug field so it's obvious in /api/analysis JSON
+                # when a regex rescue was used (and the user knows the
+                # response was truncated).
+                out["_truncated"] = True
             return out
 
     # 4. Give up: return fallback (with raw text so it's debuggable).

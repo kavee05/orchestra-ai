@@ -1,74 +1,120 @@
 # Argus
 
-> Hackathon prototype - **AI CAN DO IT** Tencent Cloud x UTM Hackathon  
-> AI Agent Track - Case Study 2: *Intelligent Early Warning System for Organisational Performance*
+> Multi-agent AI that spots trouble before it costs you.
 
-A working Flask web app that **proactively** scans multi-domain KPI  
-time-series data, flags anomalies with severity scores, asks  
-domain-expert LLM agents to explain each one, and synthesizes the  
-findings into an executive dashboard with prioritized recommended  
-actions.
+Argus is an intelligent early warning system for organisational performance. Instead of waiting for last quarter's numbers to show a problem, Argus continuously scans KPI time series across Finance, Sales, and Operations, flags anything that drifts off trend or misses its target, and uses specialised AI agents to explain *why* it happened and *what to do about it*. The result is a single dashboard an executive can read in under a minute and walk away with three concrete actions.
 
-The intent: move organisations from reactive reporting ("we noticed  
-margin dropped last quarter") to proactive intelligence ("here are the  
-3 things likely to hurt us next month and what to do about each one").
+This project was built as a submission for the **AI CAN DO IT** Tencent Cloud x UTM Hackathon, Case Study 2 (Intelligent Early Warning System for Organisational Performance), under the AI Agent Track, and developed using [WorkBuddy](https://www.codebuddy.ai) as the primary coding assistant.
 
----
+## Live demo
 
-## Features
+> https://YOUR-DEPLOYED-URL.onrender.com
 
-1. **Web dashboard** (`/`)
-   - Top: *Organizational Health Synthesis* - executive summary from  
-     the synthesis agent plus three prioritized actions.
-   - Middle: 3 trend charts (Finance / Sales / Operations) with  
-     actuals (solid line), targets (dashed line), and anomaly months  
-     marked in red.
-   - Bottom: *Anomalies & Alerts* panel - every detected anomaly,  
-     sorted High → Medium → Low, click-to-expand for full context.
-2. **Real anomaly detection engine** (`anomaly_detector.py`)
-   - 3-month rolling mean / stdev → **z-score**.
-   - Per-month **target deviation %**.
-   - Direction-aware severity weighting (a margin *drop* and a margin  
-     *spike* are not the same).
-   - Tunable thresholds (defaults: `|z| ≥ 1.6` or `|Δ target| ≥ 8%`).
-3. **Domain expert agents** (`agents.py`)
-   - **Finance Agent**, **Sales Agent**, **Operations Agent** - each  
-     with a strict role boundary enforced both by the system prompt  
-     and by routing (anomalies only flow to their own domain agent).
-   - Receives the anomaly + 3-month history + same-domain KPI snapshot.
-   - Outputs JSON `{root_cause, recommended_action}` (4-6 sentences
-     - 1 concrete action).
-4. **Synthesis agent**
-   - Reviews all flagged anomalies across domains.
-   - Detects cross-domain connections (e.g. a sales drop and a margin  
-     drop from the same root cause).
-   - Outputs `{executive_summary, prioritized_actions[3]}`.
-5. **OpenAI-compatible LLM integration** (`llm_client.py`)
-   - Set `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_MODEL` and it  
-     works with Groq, OpenAI, Tencent 混元, DeepSeek, or any other  
-     provider that follows the `/v1/chat/completions` spec.
-   - **Demo / fallback mode** - if no key is set (or the key starts  
-     with `demo`), a deterministic built-in simulator produces  
-     realistic analyst-style responses so the app always runs end-to-  
-     end for a live demo.
-6. **Synthetic data** (`data/kpi_data.py`)
-   - 8 months × 8 KPIs across Finance (revenue, gross margin, cash),  
-     Sales (units sold, new customers, return rate), Operations  
-     (fulfillment cost, on-time delivery).
-   - 6 planted anomalies in the most recent months including a  
-     cross-domain root cause cluster (Jul demand softness → margin  
-     compression → ops cost spike).
+The app runs in demo mode out of the box, so the public link above is fully functional even without an LLM key. With a real key configured, the same URL serves live analyses.
 
----
+## Why Argus
 
-## File structure
+Most business dashboards are reactive. They show what already happened, and by the time a margin drop or a fulfillment cost spike is visible, the damage is done. Argus flips the model. It runs a statistical anomaly detector on every KPI every period, asks domain-expert agents to interpret the anomalies, and asks a chief-strategy-style synthesis agent to connect the dots across domains. The output is a ranked, prioritised, plain English story about what is about to hurt you, not what already did.
+
+## Key features
+
+### Anomaly detection engine
+A pure-Python detector that scans every KPI in every month and flags anything that drifts more than 1.6 standard deviations from a 3-month rolling baseline or misses its target by more than 8 percent. Severity is direction-aware, so a margin drop and a margin spike are scored differently, and a fulfillment cost spike hurts more than a fulfillment cost dip.
+
+### Three domain-expert agents
+A dedicated agent for each business function. The Finance agent looks at revenue, margin, and cash. The Sales agent looks at units sold, new customers, return rate, pipeline, and channel mix. The Operations agent looks at fulfillment cost, on-time delivery, defect rate, and inventory. Each agent has a strict role boundary enforced by both the system prompt and the routing logic, so the Finance agent will never speculate on fulfillment issues.
+
+### Cross-domain synthesis agent
+After the three domain agents have weighed in, a synthesis agent reviews the top anomalies across all domains, identifies which ones share a common root cause, and produces an executive summary plus three prioritised actions. This is where a margin drop, a sales softness, and an operations cost spike get woven into a single narrative instead of three disconnected alerts.
+
+### Interactive live dashboard
+A single-page web app built with Chart.js. The dashboard shows three domain-level trend charts with actuals, targets, and anomaly months highlighted, plus an organisational health synthesis panel at the top and an expandable alert list at the bottom. Each chart supports click-to-expand into a larger view with pan and zoom, and every alert expands inline to show the full statistical context, root cause, and recommended action.
+
+### Rate-limit-safe LLM integration
+A thin OpenAI-compatible client that works with Groq, OpenAI, or any other provider that follows the chat-completions spec. Per-call throttling, exponential backoff on 429 and 5xx responses, and a soft retry for transient hiccups keep free-tier usage comfortably under rate limits. A deterministic built-in simulator runs when no key is configured, so the app is always demoable.
+
+## Tech stack
+
+- **Backend:** Python 3.12, Flask, Gunicorn
+- **Frontend:** Vanilla JavaScript, Chart.js 4, chartjs-plugin-zoom
+- **LLM:** Any OpenAI-compatible endpoint. Default is Groq with `openai/gpt-oss-20b`. OpenAI, DeepSeek, and other providers work by changing environment variables.
+- **Data:** 8 months of synthetic KPIs across Finance, Sales, and Operations, with planted anomalies including a cross-domain cluster (July demand softness cascading into August margin compression and a fulfillment cost spike)
+
+## How to run locally
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/YOUR-USERNAME/argus.git
+cd argus
+```
+
+### 2. Create a virtual environment and install dependencies
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Configure the LLM (optional)
+
+The app runs in demo mode with no configuration. To wire it to a real model, copy the example env file and fill in your key.
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your provider of choice.
+
+For Groq (the default, free-tier-friendly):
 
 ```
-kpi-ews/
-├── app.py                  Flask app + REST endpoints
-├── anomaly_detector.py     Real z-score + target-deviation detection
-├── agents.py               Domain agents + synthesis agent
-├── llm_client.py           OpenAI-compatible client + demo simulator
+OPENAI_API_KEY=gsk_your_key_here
+OPENAI_BASE_URL=https://api.groq.com/openai/v1
+OPENAI_MODEL=openai/gpt-oss-20b
+```
+
+For OpenAI:
+
+```
+OPENAI_API_KEY=sk_your_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+```
+
+Any OpenAI-compatible endpoint works. Set `OPENAI_BASE_URL` and `OPENAI_MODEL` accordingly.
+
+### 4. Start the server
+
+```bash
+python app.py
+```
+
+Open `http://localhost:5000` in your browser.
+
+### 5. Verify
+
+```bash
+curl http://localhost:5000/api/health
+```
+
+The first load triggers the full pipeline. It loads the synthetic data, runs the anomaly detector, calls each domain agent on every flagged anomaly, and calls the synthesis agent for the executive summary. Subsequent loads are served from an in-memory cache. Click the **Refresh analysis** button in the top right to re-run the agents.
+
+## Project structure
+
+```
+argus/
+├── app.py                  Flask app and REST endpoints
+├── anomaly_detector.py     Z-score and target-deviation detection
+├── agents.py               Domain agents and synthesis agent
+├── llm_client.py           OpenAI-compatible client and demo simulator
 ├── data/
 │   ├── __init__.py
 │   └── kpi_data.py         Synthetic 8-month KPI dataset
@@ -76,178 +122,22 @@ kpi-ews/
 │   └── dashboard.html      Single-page dashboard markup
 ├── static/
 │   ├── css/style.css       Light executive-dashboard theme
-│   └── js/dashboard.js     Chart rendering, alert expansion, refresh
-├── requirements.txt        flask + requests
-├── .env.example            Copy to `.env` and fill in for live LLM
-└── README.md               ← this file
+│   └── js/dashboard.js     Chart rendering, alert expansion, modal
+├── requirements.txt        Python dependencies
+├── Procfile                Production entry point for Render
+├── runtime.txt             Pinned Python version
+├── render.yaml             One-click Render Blueprint
+└── .env.example            Configuration template
 ```
 
----
+## Notes on the live demo
 
-## How to run
+The deployed demo is a public URL on the Render free tier. The first request after a period of inactivity takes a few seconds because the service wakes from sleep. Once warm, the full analysis pipeline runs in roughly 30 seconds on a free-tier Groq key (8 anomalies plus 1 synthesis call, throttled to one call every 2.5 seconds).
 
-### 1. Install dependencies
+## Acknowledgements
 
-```bash
-cd kpi-ews
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS / Linux:
-# source .venv/bin/activate
+Built for the **AI CAN DO IT** Tencent Cloud x UTM Hackathon, Case Study 2 (Intelligent Early Warning System for Organisational Performance), under the AI Agent Track. Developed with [WorkBuddy](https://www.codebuddy.ai) as the primary coding assistant.
 
-pip install -r requirements.txt
-```
+## License
 
-### 2. Configure the LLM (optional)
-
-The app runs in **demo mode** out of the box. To use a real LLM:
-
-```bash
-cp .env.example .env
-# then edit .env and set OPENAI_API_KEY (and optionally BASE_URL/MODEL)
-```
-
-**Groq** (default settings):
-
-```
-OPENAI_API_KEY=gsk_...
-OPENAI_BASE_URL=https://api.groq.com/openai/v1
-OPENAI_MODEL=llama-3.1-70b-versatile
-```
-
-**OpenAI**:
-
-```
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
-```
-
-The app reads env vars on startup, so you can also set them in your  
-shell instead of using a `.env` file.
-
-### 3. Run the server
-
-```bash
-python app.py
-```
-
-Open **<http://localhost:5000>** in your browser.
-
-### 4. Verify
-
-```bash
-curl http://localhost:5000/api/health
-# -> {"status":"ok","model":"llama-3.1-70b-versatile","real_api":false,...}
-```
-
-The first GET to `/api/bootstrap` will:
-
-1. Load the synthetic KPI dataset.
-2. Run the anomaly detector (z-score + target deviation).
-3. Call each domain agent (Finance / Sales / Operations) for every  
-   flagged anomaly.
-4. Call the synthesis agent to produce the executive summary.
-5. Cache everything in-memory; subsequent loads are instant.
-
-Click `⟳ Refresh analysis` to re-run all agents (useful after changing  
-your API key).
-
----
-
-## Architecture / data flow
-
-```
-Synthetic data ──► anomaly_detector ──► list of Anomaly objects
-                          │
-                          ▼
-                   agents.DomainAgent
-                   (Finance / Sales / Ops)
-                          │  (parallel fan-out, JSON in/out)
-                          ▼
-                  {root_cause, recommended_action}
-                          │
-                          ▼
-                  agents.SynthesisAgent
-                          │
-                          ▼
-                  {executive_summary, prioritized_actions[3]}
-                          │
-                          ▼
-                  Flask app.py → /api/bootstrap
-                          │
-                          ▼
-              templates/dashboard.html + Chart.js
-```
-
----
-
-## Anomaly scoring (for the curious)
-
-For each KPI value in each month:
-
-```
-z_score      = (value - rolling_mean_3m) / rolling_std_3m
-dev_pct      = (value - target) / target * 100
-flag         = |z_score| >= 1.6  OR  |dev_pct| >= 8
-score        = max(|z_score|, |dev_pct|/10) * criticality_weight
-severity     = score >= 7 ? High : score >= 4 ? Medium : Low
-```
-
-Criticality weights: Finance-3 / Ops-3 = 3, Sales = 2. Lower-better  
-KPIs (cost, return rate) flip the sign so an upward blip is what hurts  
-the score.
-
----
-
-## Demo walkthrough (for the judges)
-
-1. Open the page - the synthesis panel summarises the cross-domain  
-   story, the three charts show where things are tracking, and the  
-   alerts panel flags what's broken.
-2. The first thing they'll notice: a **High** severity *Gross Margin*  
-   alert in **Finance** for August.
-3. Click it: it expands to show (a) the z-score and target-deviation  
-   that triggered it, (b) the 3-month history table, (c) the Finance  
-   Agent's root cause (margin compression + cost-of-goods/mix shift)  
-   and a single concrete action.
-4. Scroll to the *Sales* alert for *Return Rate* (August) - notice it  
-   appears connected to the *New Customers* spike (August).
-5. The synthesis panel at the top should call this out as a separate  
-   connected cluster from the Finance/Ops margin issue.
-
----
-
-## Deployment (Render.com - free tier)
-
-Quickest path to a public URL:
-
-1. Push this repo to GitHub (don't commit `.env` - it has your Groq key).
-2. On render.com: New + → Web Service → connect the GitHub repo.
-3. Render auto-detects Python from `runtime.txt` (3.12.7) and runs the
-   `Procfile` (`gunicorn app:app`).
-4. Add env vars in the Render dashboard: `OPENAI_API_KEY`,
-   `OPENAI_BASE_URL=https://api.groq.com/openai/v1`,
-   `OPENAI_MODEL=openai/gpt-oss-20b`, `LLM_MIN_INTERVAL=2.5`.
-5. Deploy → wait ~3 min → live URL like `https://kpi-ews.onrender.com`.
-
-Free tier sleeps after 15 min idle; wakes on first request. Fine for demos.
-See `render.yaml` for a one-click Blueprint deploy alternative.
-
----
-
-## Limitations / next steps (out of scope for this prototype)
-
-- Single-tenant; no auth.
-- Synthetic data is hard-coded; swap `data/kpi_data.py` for a CSV or  
-  SQL pull to use real numbers.
-- Severity thresholds tuned for the demo dataset; expose as env vars  
-  for production tuning.
-- No persistence; cache resets on restart.
-- LLM latency: on first load the agents run sequentially. Add a  
-  thread pool or move to streaming responses for production.
-
----
-
-Built under a hackathon deadline. Functional completeness > polish.
+This project is released for hackathon demonstration purposes. Feel free to fork, learn from, and adapt it.

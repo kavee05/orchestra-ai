@@ -138,12 +138,16 @@ class DomainAgent:
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            # 900 tokens gives openai/gpt-oss-20b (which often reasons out
-            # loud before emitting JSON) enough headroom to finish a full
-            # root_cause + recommended_action response AND close the JSON
-            # braces/quote. 250 was causing the response to be truncated
-            # mid-sentence, leaving us with un-parseable JSON.
-            max_tokens=900,
+            # 1500 tokens gives openai/gpt-oss-20b (a reasoning model
+            # that runs out-loud chain-of-thought BEFORE the final
+            # answer) enough headroom for both the reasoning budget
+            # AND a full root_cause + recommended_action JSON. 900
+            # was still too tight — gpt-oss-20b frequently consumed
+            # the entire budget on internal reasoning and returned
+            # empty content. 1500 is the second line of defence; the
+            # primary fix is LLM_REASONING_EFFORT=low in llm_client.py
+            # which caps how many tokens reasoning can use.
+            max_tokens=1500,
             label=label,
         )
         # Surface error dicts from LLMClient.chat() unchanged.
@@ -172,6 +176,39 @@ class DomainAgent:
                 "_error": True,
                 "reason": raw.get("reason"),
             }
+
+        # Empty-response detection: distinguish "API call succeeded but
+        # the model returned no content" from "API call failed" or
+        # "JSON parse failed". This is a SEPARATE failure mode, almost
+        # always caused by a reasoning model burning the entire
+        # max_tokens budget on internal chain-of-thought and never
+        # producing a final answer. Logged at ERROR with a dedicated
+        # prefix so it's trivially greppable in Render logs.
+        if not raw or not str(raw).strip():
+            logger.error(
+                "LLM EMPTY RESPONSE (alert %s — %s/%s/%s): the model "
+                "returned an empty string. This almost always means the "
+                "reasoning model (gpt-oss-20b) used the entire %d-token "
+                "budget for internal chain-of-thought and never produced "
+                "a final answer. Mitigation: LLM_REASONING_EFFORT=low "
+                "in env vars (auto-applied for gpt-oss models) + the "
+                "max_tokens=1500 in DomainAgent.analyze. | model=%s",
+                anomaly.alert_id, anomaly.domain, anomaly.kpi_name,
+                anomaly.month, 1500, self.client.model,
+            )
+            return {
+                "root_cause": (
+                    "[Live LLM returned an empty response — the reasoning "
+                    "model likely consumed the entire token budget on "
+                    "internal chain-of-thought. Click 'Refresh analysis' "
+                    "to retry; the next call may succeed if reasoning "
+                    "stays short.]"
+                ),
+                "recommended_action": "(retry — reasoning budget exhausted)",
+                "_error": True,
+                "reason": "empty response (reasoning budget exhausted)",
+            }
+
         parsed = _parse_json_response(raw, {
             "root_cause": "(analysis unavailable)",
             "recommended_action": "(no action proposed)",
@@ -205,6 +242,10 @@ class DomainAgent:
                     anomaly.month, len(cleaned),
                 )
             else:
+                # The empty-raw case is now caught by the dedicated
+                # LLM EMPTY RESPONSE check above, so reaching this branch
+                # means a parse failure with content we couldn't render.
+                # Keep the original warning for visibility.
                 logger.warning(
                     "LLM FALLBACK (alert %s — %s/%s/%s): JSON parse failed "
                     "and raw response was empty; using placeholder.",
@@ -289,6 +330,36 @@ class SynthesisAgent:
                 ],
                 "_error": True,
                 "reason": raw.get("reason"),
+            }
+
+        # Empty-response detection (mirrors DomainAgent.analyze). The
+        # synthesis prompt is much larger than a per-alert prompt, so
+        # reasoning models are even more likely to burn the budget on
+        # internal thought and return empty. Same logging convention.
+        if not raw or not str(raw).strip():
+            logger.error(
+                "LLM EMPTY RESPONSE (synthesis — %d anomalies): the model "
+                "returned an empty string. This almost always means the "
+                "reasoning model (gpt-oss-20b) used the entire %d-token "
+                "budget for internal chain-of-thought and never produced "
+                "a final answer. | model=%s",
+                len(anomalies), 400, self.client.model,
+            )
+            return {
+                "executive_summary": (
+                    "[Live LLM returned an empty response for synthesis — "
+                    "the reasoning model likely consumed the entire token "
+                    "budget on internal chain-of-thought. Per-alert "
+                    "analyses below are still valid. Click 'Refresh "
+                    "analysis' to retry the synthesis.]"
+                ),
+                "prioritized_actions": [
+                    "Review the per-alert analyses below for individual actions.",
+                    "Retry synthesis — the next call may succeed if reasoning stays short.",
+                    "Re-run analysis in a few minutes if reasoning keeps consuming the budget.",
+                ],
+                "_error": True,
+                "reason": "empty response (reasoning budget exhausted)",
             }
         parsed = _parse_json_response(raw, {
             "executive_summary": "(synthesis unavailable)",

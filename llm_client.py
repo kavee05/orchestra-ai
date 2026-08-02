@@ -28,6 +28,7 @@ plain string on success, or a structured error dict on failure.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
@@ -39,6 +40,19 @@ try:
     import requests
 except ImportError:  # pragma: no cover
     requests = None  # type: ignore
+
+
+# Module-level logger so the "reasoning_effort rejected" warning in chat()
+# and any future client-side events have a stable log channel. Stays at
+# INFO by default; chat() and agents.py emit ERROR/WARNING for failures.
+logger = logging.getLogger("kpi_ews.llm_client")
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    ))
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
 
 
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
@@ -84,6 +98,24 @@ class LLMClient:
         self.json_mode = os.environ.get("LLM_JSON_MODE", "").lower() in {
             "1", "true", "yes", "on",
         }
+        # LLM_REASONING_EFFORT - reduce the chain-of-thought budget Groq
+        # reasoning models (gpt-oss-20b/120b) use BEFORE producing the
+        # final answer. Without this, gpt-oss-20b frequently burns the
+        # entire max_tokens budget on internal reasoning and returns an
+        # empty `choices[0].message.content`. Valid values on Groq are
+        # "low" / "medium" / "high". Set to "" (empty) to disable.
+        # Auto-detect: "low" for gpt-oss models, omitted for everything
+        # else. Override with the env var.
+        env_re = os.environ.get("LLM_REASONING_EFFORT")
+        if env_re is not None:
+            # Explicit env-var override (including empty string to disable).
+            self.reasoning_effort: Optional[str] = env_re.strip() or None
+        else:
+            m = self.model.lower()
+            if "gpt-oss" in m or "-oss-" in m:
+                self.reasoning_effort = "low"
+            else:
+                self.reasoning_effort = None
         self.use_real = self._should_use_real(self.api_key)
 
         # Rate-limit tracking (thread-safe).
@@ -182,6 +214,29 @@ class LLMClient:
                             last_body = (resp.text or "")[:600]
                         except Exception:
                             pass
+                # Detect if Groq specifically rejected the reasoning_effort
+                # parameter. This is a CONFIG error (not transient), so we
+                # log it as a dedicated WARNING with actionable advice
+                # ("rely on max_tokens increase instead") rather than
+                # burning the retry budget. We only do this on the FIRST
+                # attempt — retries won't magically make Groq accept the
+                # param, so just bail out.
+                if (last_status == 400
+                        and self.reasoning_effort
+                        and "reasoning_effort" in last_body.lower()):
+                    logger.warning(
+                        "LLM CONFIG REJECTED (model=%s): Groq returned HTTP 400 "
+                        "and the body mentions 'reasoning_effort' — this "
+                        "model/version does not support that parameter. "
+                        "Disabling it for this session and falling back to "
+                        "max_tokens-only path. To permanently disable, set "
+                        "LLM_REASONING_EFFORT='' in your env vars. "
+                        "body=%s",
+                        self.model, last_body[:300],
+                    )
+                    self.reasoning_effort = None
+                    # Don't retry — Groq will keep rejecting.
+                    break
                 is_rate_limit = (
                     last_status == 429
                     or "rate_limit" in last_body.lower()
@@ -268,6 +323,17 @@ class LLMClient:
         # this OFF by default and let users flip it on with LLM_JSON_MODE=1.
         if self.json_mode:
             payload["response_format"] = {"type": "json_object"}
+        # reasoning_effort is a Groq-specific parameter that caps how much
+        # of the token budget reasoning models (gpt-oss-20b/120b) spend
+        # on internal chain-of-thought before emitting the final answer.
+        # Without it, gpt-oss-20b routinely burns the whole max_tokens
+        # budget on thinking and returns empty content. We only add it
+        # when self.reasoning_effort is set (auto-detected for gpt-oss
+        # models, controllable via LLM_REASONING_EFFORT env var). If
+        # Groq rejects it for a particular model, chat() detects that
+        # in the error body and logs a dedicated WARNING.
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         resp = requests.post(url, headers=headers, json=payload,
                              timeout=self.timeout)
         # Raise_for_status handles 429 + 5xx for us; we read body in chat().
